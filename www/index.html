@@ -1,0 +1,339 @@
+<html>
+<head>
+  <meta content='text/html;charset=utf-8' http-equiv='content-type'>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>SJTU Mensa Capacity Prediction</title>
+  <script src="//code.jquery.com/jquery-2.1.3.js" type="text/javascript"></script>
+  <link rel="stylesheet" href="//code.jquery.com/ui/1.11.2/themes/smoothness/jquery-ui.css">
+  <script src="//code.jquery.com/ui/1.11.2/jquery-ui.js"></script>
+  <script src="shared/shiny.js" type="text/javascript"></script>
+  <link rel="stylesheet" href="//netdna.bootstrapcdn.com/bootstrap/3.1.1/css/bootstrap.min.css">
+	<link rel="stylesheet" href="//netdna.bootstrapcdn.com/bootstrap/3.1.1/css/bootstrap-theme.min.css">
+  <script src="//netdna.bootstrapcdn.com/bootstrap/3.1.1/js/bootstrap.min.js"></script>
+  <script type="text/javascript" src="//maps.googleapis.com/maps/api/js?key=AIzaSyCgV1hW4Dd-UaqDQkTcWUxmtWJ4jMpFC_s&language=en-US"></script>
+  <link rel="stylesheet" type="text/css" href="shared/shiny.css"/> 
+  <style tyle="text/css">
+  .glyphicon-refresh-animate {
+    -animation: spin .7s infinite linear;
+    -webkit-animation: spin2 .7s infinite linear;
+  }
+
+  @-webkit-keyframes spin2 {
+      from { -webkit-transform: rotate(0deg);}
+      to { -webkit-transform: rotate(360deg);}
+  }
+  
+  @keyframes spin {
+      from { transform: scale(1) rotate(0deg);}
+      to { transform: scale(1) rotate(360deg);}
+  }
+  </style>
+  <script type="text/javascript">
+  
+  $(function(){
+    var mapCancas = $('#map-canvas');
+  	var map = new google.maps.Map(mapCancas.get(0));
+    var markers = [];
+    var curInfowindow;
+    
+    function resizeMap(){
+    	var minHeight = 450;
+  		var height = Math.max($(document).height() - mapCancas.offset().top - 20, minHeight);
+  		mapCancas.height(height);
+  		google.maps.event.trigger(map, 'resize');
+  	}
+    
+    resizeMap();
+    $(window).resize(resizeMap);
+    
+    google.maps.event.addListener(map, 'click', function () {
+      if(curInfowindow){
+          curStationId = null; 
+          curInfowindow.close();
+          curInfowindow = null;
+          curTimeIdx = null;
+          ajax.plotPrediction();
+      }
+    });
+    
+    var geocoder = new google.maps.Geocoder();
+    geocoder.geocode( { address: 'SJTU'}, function(results, status) {
+      if (status == google.maps.GeocoderStatus.OK) {
+    		var shanghaiBounds = results[0].geometry.viewport;
+    		map.fitBounds(shanghaiBounds);
+        map.panTo(shanghaiBounds.getCenter());
+    	}
+    });
+    
+    var now = new Date();
+    $('#time').text(formatTime(now));
+    
+    var slider = $("#slider").slider({
+      min: 1,
+      max: 12 * 17,
+      value: getTimeIndex(now),
+      change: function( event, ui ) {
+        updateMapInfo();
+      },
+      slide: function(event, ui){
+        var startOfToday = new Date();
+        startOfToday.setHours(5);
+        startOfToday.setMinutes(0);
+        startOfToday.setSeconds(0);
+        startOfToday.setMilliseconds(0);
+        $('#time').text(formatTime(new Date(
+          startOfToday.getTime() + (ui.value - 1) * 60000*5
+        )));
+      }
+    });
+    
+    $('#set-to-now').click(function(){
+      var now = new Date();
+      $('#time').text(formatTime(now));
+      $("#slider").slider('value', getTimeIndex(now));
+    });
+    
+    ajax('getPredictionByTimeIdx', function(){
+      setTimeout(function(){
+        updateMapInfo(true);
+      }, 50)
+    });
+    
+    ajax('plotPrediction');
+    
+    var curStationId;
+    var curTimeIdx;
+    
+    function updateMapInfo(fit){
+      ajax.getPredictionByTimeIdx($("#slider").slider('value'),
+          function(data){
+            clearMarkers();
+            $.each(data, function(id, station){
+              var color = getColor(station.freq/100);
+              var marker = placeMarker(station.name, station.lat, station.lon, color);
+            	google.maps.event.addListener(marker, 'click', function() {
+                var content = '<div style="width: 400px;">'
+              		+ '<h4 style="color: #' + color + ';">' + station.name + '</h4>'
+                  + '<div id="plot-placeholder" style="height: 250px; width: 100%; background-color: #f5f5f5;'
+                      +'text-align: center;">'
+                    + '<span class="glyphicon glyphicon-refresh glyphicon-refresh-animate" style="line-height: 249px;"></span>'
+                  +'</div>'
+                  + '<img id="popup-plot"/>'
+        				+ '</div>'
+                var infowindow = new google.maps.InfoWindow({
+            	    content: content,
+                  disableAutoPan: id == curStationId
+          	    });
+                google.maps.event.addListener(infowindow,'closeclick', function(){
+                  curStationId = null; 
+                  curInfowindow == null;
+                  curTimeIdx = null;
+                  ajax.plotPrediction();
+                });
+                var timeIdx = $("#slider").slider('value');
+                if(curInfowindow == null || curStationId != id || curTimeIdx != timeIdx){
+                  if(curInfowindow != null){
+                    curInfowindow.close(); 
+                  }
+                  curInfowindow = infowindow;
+                  curStationId = id;
+                  curTimeIdx = timeIdx;
+                	curInfowindow.open(map, marker);
+                  ajax.plotPrediction({
+                    stationId: id,
+                    timeIdx: timeIdx
+                  }, function(){
+                    setTimeout(function(){
+                      $('#plot-placeholder').remove();
+                      $('#popup-plot').attr('src', $('#plot img').attr('src'));
+                    }, 50);
+                  });
+            		}
+            	});
+              if(id == curStationId){
+                google.maps.event.trigger(marker, 'click')
+              }
+            });
+            if(fit){
+              fitMapToMarkers();
+            }
+          }
+        );
+    }
+    
+    function clearMarkers(){
+      for(var i=0; i<markers.length; i++){
+      	markers[i].setMap(null);
+    	}
+    	markers = [];
+    }
+    function placeMarker(name, lat, lng, color){
+    	var pinImage = new google.maps.MarkerImage("http://chart.apis.google.com/chart?chst=d_map_pin_letter&chld=%E2%80%A2|" + color,
+    	    new google.maps.Size(21, 34),
+    	    new google.maps.Point(0,0),
+    	    new google.maps.Point(10, 34)
+    	);
+    	var pinShadow = new google.maps.MarkerImage("http://chart.apis.google.com/chart?chst=d_map_pin_shadow",
+    	    new google.maps.Size(40, 37),
+    	    new google.maps.Point(0, 0),
+    	    new google.maps.Point(12, 35)
+    	);
+    	var ll = new google.maps.LatLng(lat, lng);
+    	var marker = new google.maps.Marker({
+            map: map,
+            position: ll,
+    		icon: pinImage,
+            shadow: pinShadow,
+    		title: name
+        });
+    	markers.push(marker);
+    	return marker;
+    }
+    
+    function fitMapToMarkers(){
+    	var mapBounds = new google.maps.LatLngBounds();
+    	var markerCnt = 0;
+    	for(var i=0; i<markers.length; i++){
+    		mapBounds.extend(markers[i].getPosition());
+    		markerCnt++;
+    	}
+    	if(markerCnt > 1){
+    		map.fitBounds(mapBounds);
+    		map.panTo(mapBounds.getCenter());
+    	}
+    }
+  });
+  
+  function getColor(ratio){
+    if(ratio <= 0.1){
+      ratio = 0;
+    }else{
+      ratio *= 2; 
+    }
+    ratio = Math.min(Math.max(ratio, 0), 1);
+    var color1 = 'FF4444';
+    var color2 = '99cc00';
+    var hex = function(x) {
+      x = x.toString(16);
+      return (x.length == 1) ? '0' + x : x;
+    };
+    var r = Math.ceil(parseInt(color1.substring(0,2), 16) * ratio + parseInt(color2.substring(0,2), 16) * (1-ratio));
+    var g = Math.ceil(parseInt(color1.substring(2,4), 16) * ratio + parseInt(color2.substring(2,4), 16) * (1-ratio));
+    var b = Math.ceil(parseInt(color1.substring(4,6), 16) * ratio + parseInt(color2.substring(4,6), 16) * (1-ratio));
+    return hex(r) + hex(g) + hex(b);
+  }
+  
+  function ajax(name, ready){
+      window.ajax[name] = function(){};
+      $('<div id="' + name + '">').appendTo('body');
+      var oBinding = new Shiny.OutputBinding();
+      $.extend(oBinding, {
+        renderValue: function(el, data){
+          if(window.ajax[name].res){
+            window.ajax[name].res(data);
+          }
+        },
+        find: function(scope) {
+          return $(scope).find('#' + name);
+        }
+      });
+      Shiny.outputBindings.register(oBinding);
+      var iBinding = new Shiny.InputBinding();
+      $.extend(iBinding, {
+        find: function(scope) {
+          return $(scope);
+        },
+        getId: function(){
+          return name;
+        },
+        getValue: function(){
+          return window.ajax[name].req?window.ajax[name].req:'';
+        },
+        subscribe: function(el, callback) {
+          window.ajax[name] = function(req, res){
+            window.ajax[name].req = req;
+            window.ajax[name].res = res;
+            callback();
+          };
+          if(ready){
+            ready();
+          }
+        },
+        unsubscribe: function(el) {
+          window.ajax[name] = function(){};
+        }
+      });
+      Shiny.inputBindings.register(iBinding); 
+  }
+  
+  function getTimeIndex(time){
+    var utc = time.getTime();
+    var startOfToday = new Date(utc);
+    startOfToday.setHours(5);
+    startOfToday.setMinutes(0);
+    startOfToday.setSeconds(0);
+    startOfToday.setMilliseconds(0);
+    return Math.ceil((utc -startOfToday.getTime()) / (60000*5)); // 5min
+  }
+  
+  function zeroFill(number, width){
+    width -= number.toString().length;
+    if ( width > 0 )
+    {
+      return new Array( width + (/\./.test( number ) ? 2 : 1) ).join( '0' ) + number;
+    }
+    return number + ""; // always return a string
+  }
+  
+  function formatTime(time){
+  	// just to keep 5min
+    return zeroFill(time.getHours(), 2) + ':' + zeroFill(time.getMinutes()-time.getMinutes()%5, 2);
+  }
+  
+  </script>
+</head>
+<body>
+<div class="container" style="min-width: 500px;">
+  <div class="page-header">
+    <h1>SJTU Mensa Freqeuncy Prediction</h1>
+  </div>
+  <div class="row" style="height: 3em;">
+    <div class="col-md-6" style="padding-top: 0.7em;">
+      <div id="slider"></div>
+    </div>
+    <div class="h3 text-info" style="margin: 0;">
+      <a id="set-to-now" class="btn btn-default">Set to now</a>  
+      &nbsp;Time: <span id="time"></span>
+    </div>
+  </div>
+  <div class="row" style="margin-top: 1em;">
+    <div style="
+background: rgb(153,204,0); /* Old browsers */
+background: -moz-linear-gradient(left,  rgba(153,204,0,1) 0%, rgba(255,68,68,1) 100%); /* FF3.6+ */
+background: -webkit-gradient(linear, left top, right top, color-stop(0%,rgba(153,204,0,1)), color-stop(100%,rgba(255,68,68,1))); /* Chrome,Safari4+ */
+background: -webkit-linear-gradient(left,  rgba(153,204,0,1) 0%,rgba(255,68,68,1) 100%); /* Chrome10+,Safari5.1+ */
+background: -o-linear-gradient(left,  rgba(153,204,0,1) 0%,rgba(255,68,68,1) 100%); /* Opera 11.10+ */
+background: -ms-linear-gradient(left,  rgba(153,204,0,1) 0%,rgba(255,68,68,1) 100%); /* IE10+ */
+background: linear-gradient(to right,  rgba(153,204,0,1) 0%,rgba(255,68,68,1) 100%); /* W3C */
+filter: progid:DXImageTransform.Microsoft.gradient( startColorstr='#99cc00', endColorstr='#ff4444',GradientType=1 ); /* IE6-9 */
+    color: white;
+    height: 25px;
+    line-height: 25px;
+    padding: 0 1em;
+    margin: 0;
+" class="h4">
+  <span>Available</span>
+  <span style="float:right;">Full</span>
+</div>
+  </div>
+  <div class="row">
+    <div id="map-canvas" style="height: 200px;"></div>
+  </div>
+  <div class="row">
+    <!--div id="plot" class="shiny-plot-output" 
+       style="width: 100%; height: 400px"></div--> 
+  </div>
+  <div id="plot" class="shiny-plot-output" style="width: 400px; height: 250px; position: absolute; top: -250px;"></div>
+</div>
+</body>
+</html>
